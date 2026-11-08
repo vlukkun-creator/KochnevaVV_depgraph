@@ -3,6 +3,9 @@ import argparse
 import os
 import re
 import sys
+import json
+import urllib.error
+import urllib.request
 import urllib.parse
 
 DEFAULT_REPO = "https://pypi.org/pypi"
@@ -15,6 +18,11 @@ EXIT_OK = 0
 EXIT_ERROR = 1
 PACKAGE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 CONFIG_KEYS = ("package", "repo", "test", "ascii", "depth", "filter")
+TIMEOUT_SECONDS = 10
+HTTP_NOT_FOUND = 404
+NAME_PATTERN = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
+EXTRA_PATTERN = re.compile(r"extra\s*==")
+SEPARATOR_PATTERN = re.compile(r"[-_.]+")
 
 
 class ToolError(Exception):
@@ -46,6 +54,10 @@ def build_parser():
     parser.add_argument(
         "--filter",
         help="не учитывать пакеты, в имени которых есть эта подстрока",
+    )
+    parser.add_argument(
+        "--debug", action="store_true",
+        help="показать все параметры при запуске",
     )
     return parser
 
@@ -139,12 +151,90 @@ def show_config(config):
         print(f"  {key} = {value}")
 
 
+def normalize_name(name):
+    """Делает имя пакета маленькими буквами, а ._- заменяет на дефис."""
+    return SEPARATOR_PATTERN.sub("-", name).lower()
+
+
+def fetch_json(url):
+    """Скачивает страницу по адресу и превращает ответ в словарь."""
+    try:
+        with urllib.request.urlopen(url, timeout=TIMEOUT_SECONDS) as answer:
+            raw = answer.read()
+    except urllib.error.HTTPError as error:
+        if error.code == HTTP_NOT_FOUND:
+            raise ToolError(f"пакет не найден в репозитории: {url}")
+        raise ToolError(
+            f"репозиторий вернул ошибку {error.code}: {url}"
+        )
+    except OSError as error:
+        raise ToolError(f"не удалось подключиться к {url}")
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except ValueError as error:
+        raise ToolError(f"репозиторий вернул неверные данные: {url}")
+
+
+def read_requirements(data):
+    """Достает из ответа репозитория список строк с зависимостями."""
+    try:
+        lines = data["info"]["requires_dist"]
+    except (KeyError, TypeError):
+        raise ToolError("в ответе репозитория нет данных о пакете")
+    return lines or []
+
+
+def parse_requirement(line):
+    """Берет из строки зависимости имя пакета.
+
+    Если зависимость нужна только для дополнительной опции (extra),
+    возвращает None, потому что pip ее по умолчанию не ставит.
+    """
+    if EXTRA_PATTERN.search(line):
+        return None
+    match = NAME_PATTERN.match(line)
+    if match is None:
+        return None
+    return normalize_name(match.group(1))
+
+
+def get_direct_dependencies(repo, package):
+    """Возвращает прямые зависимости пакета из репозитория без повторов."""
+    data = fetch_json(f"{repo}/{package}/json")
+    names = []
+    for line in read_requirements(data):
+        name = parse_requirement(line)
+        if name is not None and name not in names:
+            names.append(name)
+    return names
+
+
+def show_direct(config):
+    """Печатает прямые зависимости пакета (этап 2)."""
+    if config["test"]:
+        raise ToolError("тестовый режим появится на следующем этапе")
+    package = normalize_name(config["package"])
+    names = get_direct_dependencies(config["repo"], package)
+    print(f"Прямые зависимости пакета {package}:")
+    for name in names:
+        print(f"  {name}")
+    if not names:
+        print("  (прямых зависимостей нет)")
+
+
+def run(config, debug):
+    """Выполняет главное действие программы в зависимости от параметров."""
+    if debug:
+        show_config(config)
+    show_direct(config)
+
+
 def main(argv=None):
     """Запускает программу, возвращает код завершения."""
     args = build_parser().parse_args(argv)
     try:
         config = read_config(args)
-        show_config(config)
+        run(config, args.debug)
     except ToolError as error:
         print(f"Ошибка: {error}", file=sys.stderr)
         return EXIT_ERROR

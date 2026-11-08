@@ -7,6 +7,7 @@ import json
 import urllib.error
 import urllib.request
 import urllib.parse
+from collections import deque
 
 DEFAULT_REPO = "https://pypi.org/pypi"
 DEFAULT_DEPTH = 3
@@ -23,6 +24,8 @@ HTTP_NOT_FOUND = 404
 NAME_PATTERN = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
 EXTRA_PATTERN = re.compile(r"extra\s*==")
 SEPARATOR_PATTERN = re.compile(r"[-_.]+")
+TEST_NAME_PATTERN = re.compile(r"^[A-Z]+$")
+COMMENT_SIGN = "#"
 
 
 class ToolError(Exception):
@@ -209,24 +212,141 @@ def get_direct_dependencies(repo, package):
     return names
 
 
-def show_direct(config):
-    """Печатает прямые зависимости пакета (этап 2)."""
+def parse_test_line(number, line):
+    """Разбирает строку тестового файла вида  A: B C.
+
+    Пустые строки и комментарии пропускает (возвращает None).
+    """
+    text = line.split(COMMENT_SIGN, 1)[0].strip()
+    if not text:
+        return None
+    name, separator, rest = text.partition(":")
+    if not separator:
+        raise ToolError(f"строка {number}: нет двоеточия после имени")
+    name = name.strip()
+    deps = []
+    for item in rest.split():
+        if item not in deps:
+            deps.append(item)
+    for item in [name] + deps:
+        if not TEST_NAME_PATTERN.match(item):
+            raise ToolError(
+                f"строка {number}: неверное имя пакета '{item}' "
+                "(нужны большие латинские буквы)"
+            )
+    return name, deps
+
+
+def read_test_repo(path):
+    """Читает файл тестового репозитория в словарь пакет -> зависимости."""
+    try:
+        with open(path, encoding="utf-8-sig") as file:
+            lines = file.read().splitlines()
+    except (OSError, UnicodeDecodeError) as error:
+        raise ToolError(f"не удалось прочитать файл {path}")
+    repo = {}
+    for number, line in enumerate(lines, start=1):
+        item = parse_test_line(number, line)
+        if item is None:
+            continue
+        name, deps = item
+        if name in repo:
+            raise ToolError(f"строка {number}: пакет {name} описан второй раз")
+        repo[name] = deps
+    return repo
+
+
+def check_known(repo, package):
+    """Проверяет, что пакет упоминается в тестовом репозитории."""
+    known = set(repo)
+    for deps in repo.values():
+        known.update(deps)
+    if package not in known:
+        raise ToolError(f"пакет {package} не найден в тестовом репозитории")
+
+
+def get_root(config):
+    """Возвращает имя пакета, с которого начинается анализ."""
     if config["test"]:
-        raise ToolError("тестовый режим появится на следующем этапе")
-    package = normalize_name(config["package"])
-    names = get_direct_dependencies(config["repo"], package)
-    print(f"Прямые зависимости пакета {package}:")
-    for name in names:
-        print(f"  {name}")
-    if not names:
-        print("  (прямых зависимостей нет)")
+        return config["package"]
+    return normalize_name(config["package"])
+
+
+def test_deps(repo, name):
+    """Берет зависимости пакета из словаря тестового репозитория."""
+    return repo.get(name, [])
+
+
+def is_filtered(name, substring):
+    """Проверяет, что пакет надо пропустить из-за подстроки фильтра."""
+    return substring is not None and substring in name
+
+
+def build_graph(root, load_deps, source, max_depth, substring):
+    """Строит граф зависимостей обходом в ширину (BFS), без рекурсии.
+
+    Граф это словарь: имя пакета -> список его зависимостей.
+    Зависимости берет функция load_deps(source, имя): source это словарь
+    тестового репозитория или адрес настоящего.
+    Пакеты на предельной глубине попадают в граф, но не раскрываются.
+    Если пакет уже встречался (цикл), второй раз его не обходим,
+    но ребро к нему сохраняем.
+    """
+    graph = {}
+    seen = {root}
+    queue = deque([(root, 0)])
+    while queue:
+        name, level = queue.popleft()
+        if level >= max_depth:
+            graph[name] = []
+            continue
+        found = load_deps(source, name)
+        deps = [d for d in found if not is_filtered(d, substring)]
+        graph[name] = deps
+        for dep in deps:
+            if dep not in seen:
+                seen.add(dep)
+                queue.append((dep, level + 1))
+    return graph
+
+
+def forward_graph(config):
+    """Строит граф зависимостей пакета, который выбрал пользователь."""
+    root = get_root(config)
+    if config["test"]:
+        repo = read_test_repo(config["repo"])
+        check_known(repo, root)
+        loader, source = test_deps, repo
+    else:
+        loader, source = get_direct_dependencies, config["repo"]
+    depth, substring = config["depth"], config["filter"]
+    return build_graph(root, loader, source, depth, substring)
+
+
+def graph_lines(graph):
+    """Делает строки для вывода: на каждой пакет и его зависимости."""
+    lines = []
+    for name, deps in graph.items():
+        text = " ".join(deps) if deps else "-"
+        lines.append(f"{name} -> {text}")
+    return lines
+
+
+def show_graph(config):
+    """Строит граф и печатает его на экран (этапы 3 и 4)."""
+    graph = forward_graph(config)
+    print(f"Граф зависимостей пакета {get_root(config)}:")
+    print(f"(глубина анализа: {config['depth']})")
+    for line in graph_lines(graph):
+        print(f"  {line}")
+    print(f"Всего пакетов в графе: {len(graph)}")
 
 
 def run(config, debug):
     """Выполняет главное действие программы в зависимости от параметров."""
     if debug:
         show_config(config)
-    show_direct(config)
+    show_graph(config)
 
 
 def main(argv=None):

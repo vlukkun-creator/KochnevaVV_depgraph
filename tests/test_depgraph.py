@@ -16,6 +16,12 @@ EXPECTED_BAD_CODE = 1
 EXPECTED_ARGPARSE_CODE = 2
 NOT_FOUND = 404
 SERVER_ERROR = 500
+GRAPH_SIZE = 4
+
+
+def fake_deps(source, name):
+    """Подставляет зависимости вместо запроса в интернет."""
+    return {"requests": ["idna"]}.get(name, [])
 
 
 def repo_path(name):
@@ -168,21 +174,104 @@ class RequirementTest(unittest.TestCase):
                 with self.assertRaises(ToolError):
                     depgraph.fetch_json("http://x")
 
-    def test_main_prints_dependencies(self):
-        """На втором этапе main печатает прямые зависимости."""
-        with mock.patch("depgraph.get_direct_dependencies",
-                        return_value=["idna", "certifi"]):
-            code, out, _ = run_main(["--package", "Requests"])
-        self.assertEqual(code, 0)
-        self.assertIn("idna", out)
-        self.assertIn("requests", out)
 
-    def test_test_mode_not_ready(self):
-        """Тестовый режим на этом этапе еще не готов."""
+class TestRepoTest(unittest.TestCase):
+    """Чтение тестового репозитория."""
+
+    def test_read(self):
+        """Файл читается в словарь."""
+        repo = depgraph.read_test_repo(repo_path("simple.txt"))
+        self.assertEqual(repo["A"], ["B", "C"])
+        self.assertEqual(repo["D"], [])
+
+    def test_bad_files(self):
+        """Неверные файлы дают ошибку."""
+        for name in ("bad_no_colon.txt", "bad_name.txt",
+                     "bad_duplicate.txt"):
+            with self.assertRaises(ToolError):
+                depgraph.read_test_repo(repo_path(name))
+
+    def test_unknown_package(self):
+        """Пакета нет в файле - ошибка."""
         code, _, err = run_main(
-            ["--package", "A", "--test", "--repo", repo_path("simple.txt")])
+            ["--package", "Z", "--test", "--repo", repo_path("simple.txt")])
         self.assertEqual(code, EXPECTED_BAD_CODE)
-        self.assertIn("следующем этапе", err)
+        self.assertIn("не найден", err)
+
+    def test_comment_line(self):
+        """Комментарии и пустые строки пропускаются."""
+        self.assertIsNone(depgraph.parse_test_line(1, "# text"))
+        self.assertIsNone(depgraph.parse_test_line(1, "   "))
+        self.assertEqual(depgraph.parse_test_line(1, "A: B B"), ("A", ["B"]))
+
+
+class BuildGraphTest(unittest.TestCase):
+    """Обход графа в ширину."""
+
+    def graph(self, name, root="A", depth=10, substring=None):
+        """Строит граф по тестовому файлу."""
+        repo = depgraph.read_test_repo(repo_path(name))
+        return depgraph.build_graph(
+            root, depgraph.test_deps, repo, depth, substring)
+
+    def test_diamond(self):
+        """У ромба четыре пакета, D один раз."""
+        graph = self.graph("simple.txt")
+        self.assertEqual(len(graph), GRAPH_SIZE)
+        self.assertEqual(list(graph), ["A", "B", "C", "D"])
+
+    def test_depth(self):
+        """Глубина ограничивает обход."""
+        graph = self.graph("chain.txt", depth=2)
+        self.assertEqual(list(graph), ["A", "B", "C"])
+        self.assertEqual(graph["C"], [])
+
+    def test_filter(self):
+        """Пакеты с подстрокой не попадают в граф."""
+        graph = self.graph("simple.txt", substring="C")
+        self.assertEqual(list(graph), ["A", "B", "D"])
+        self.assertEqual(graph["A"], ["B"])
+
+    def test_cycle(self):
+        """Цикл не приводит к бесконечному обходу."""
+        graph = self.graph("cycle.txt")
+        self.assertEqual(graph, {"A": ["B"], "B": ["C"], "C": ["A"]})
+
+    def test_self_cycle(self):
+        """Пакет, зависящий от самого себя, тоже обрабатывается."""
+        graph = self.graph("self_cycle.txt")
+        self.assertEqual(graph["A"], ["A", "B"])
+
+    def test_no_deps(self):
+        """У пакета без зависимостей один узел."""
+        self.assertEqual(self.graph("no_deps.txt"), {"A": []})
+
+    def test_long_chain_no_recursion(self):
+        """Очень длинная цепочка не ломает обход (рекурсии нет)."""
+        size = 5000
+        chain = {f"N{i}": [f"N{i + 1}"] for i in range(size)}
+        graph = depgraph.build_graph(
+            "N0", depgraph.test_deps, chain, size, None)
+        self.assertEqual(len(graph), size + 1)
+
+    def test_real_source(self):
+        """Для настоящего репозитория зависимости берутся из PyPI."""
+        graph = depgraph.build_graph(
+            "requests", fake_deps, "http://r", 3, None)
+        self.assertEqual(graph, {"requests": ["idna"], "idna": []})
+
+    def test_graph_lines(self):
+        """Строки графа выглядят как  A -> B C."""
+        lines = depgraph.graph_lines(self.graph("simple.txt"))
+        self.assertEqual(lines[0], "A -> B C")
+        self.assertEqual(lines[-1], "D -> -")
+
+    def test_main_output(self):
+        """main печатает граф в тестовом режиме."""
+        code, out, _ = run_main(
+            ["--package", "A", "--test", "--repo", repo_path("cycle.txt")])
+        self.assertEqual(code, 0)
+        self.assertIn("C -> A", out)
 
 
 if __name__ == "__main__":

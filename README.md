@@ -16,6 +16,7 @@
 - не учитывает пакеты, в имени которых есть заданная подстрока;
 - правильно обрабатывает циклические зависимости;
 - работает с тестовым репозиторием (файл с пакетами `A`, `B`, `C`...);
+- показывает обратные зависимости (кто зависит от пакета) в тестовом режиме;
 
 ## 2. Описание функций и настроек
 
@@ -30,6 +31,7 @@
 | `--depth N` | максимальная глубина анализа, от 1 до 50 (по умолчанию 3) |
 | `--filter ТЕКСТ` | не учитывать пакеты, в имени которых есть эта подстрока |
 | `--debug` | при запуске показать все параметры в виде `ключ = значение` |
+| `--reverse` | показать обратные зависимости (только вместе с `--test`) |
 
 Все ошибки (неверное имя, глубина, URL, нет файла и т.д.) печатаются
 в виде `Ошибка: ...`, программа завершается с кодом 1.
@@ -63,7 +65,7 @@ set PYTHONPATH=src
 python -m unittest discover -s tests -v
 ```
 
-Демонстрационный сценарий этапа: `.\scripts\stage3.bat`.
+Демонстрационный сценарий этапа: `.\scripts\stage4.bat`.
 
 ## 4. Примеры использования
 
@@ -71,4 +73,5 @@ python -m unittest discover -s tests -v
 python src\depgraph.py --package A --repo tests\repos\simple.txt --test
 python src\depgraph.py --package A --repo tests\repos\cycle.txt --test
 python src\depgraph.py --package A --repo tests\repos\big.txt --test --depth 2 --filter G
+python src\depgraph.py --package D --repo tests\repos\simple.txt --test --reverse
 ```

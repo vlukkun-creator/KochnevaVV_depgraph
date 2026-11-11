@@ -18,7 +18,7 @@ URL_SCHEMES = ("http", "https")
 EXIT_OK = 0
 EXIT_ERROR = 1
 PACKAGE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-CONFIG_KEYS = ("package", "repo", "test", "ascii", "depth", "filter")
+CONFIG_KEYS = ("package", "repo", "test", "ascii", "depth", "filter", "reverse")
 TIMEOUT_SECONDS = 10
 HTTP_NOT_FOUND = 404
 NAME_PATTERN = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
@@ -61,6 +61,10 @@ def build_parser():
     parser.add_argument(
         "--debug", action="store_true",
         help="показать все параметры при запуске",
+    )
+    parser.add_argument(
+        "--reverse", action="store_true",
+        help="показать обратные зависимости (кто зависит от пакета)",
     )
     return parser
 
@@ -141,6 +145,7 @@ def read_config(args):
         "ascii": args.ascii,
         "depth": check_depth(args.depth),
         "filter": check_filter(args.filter, package),
+        "reverse": args.reverse,
     }
 
 
@@ -342,10 +347,70 @@ def show_graph(config):
     print(f"Всего пакетов в графе: {len(graph)}")
 
 
+def reverse_edges(repo):
+    """Переворачивает граф: пакет -> список тех, кто от него зависит."""
+    reverse = {}
+    for name, deps in repo.items():
+        for dep in deps:
+            reverse.setdefault(dep, []).append(name)
+    return reverse
+
+
+def reverse_graph(config):
+    """Строит граф обратных зависимостей тем же обходом BFS.
+
+    Работает только в тестовом режиме, потому что в реальном репозитории
+    нельзя узнать, какие пакеты зависят от данного.
+    """
+    if not config["test"]:
+        raise ToolError(
+            "обратные зависимости работают только в тестовом режиме "
+            "(параметр --test): реальный репозиторий не говорит, "
+            "кто зависит от пакета"
+        )
+    package = config["package"]
+    repo = read_test_repo(config["repo"])
+    check_known(repo, package)
+    source = reverse_edges(repo)
+    depth, substring = config["depth"], config["filter"]
+    return build_graph(package, test_deps, source, depth, substring)
+
+
+def reverse_lines(graph):
+    """Делает строки вида  D <- B C  только для пакетов, у которых они есть."""
+    return [
+        f"{name} <- {' '.join(users)}" for name, users in graph.items() if users
+    ]
+
+
+def count_users(graph):
+    """Считает разные пакеты, которые встретились как зависящие."""
+    users = set()
+    for names in graph.values():
+        users.update(names)
+    return len(users)
+
+
+def show_reverse(config):
+    """Печатает пакеты, которые зависят от выбранного пакета (этап 4)."""
+    graph = reverse_graph(config)
+    package = config["package"]
+    print(f"Обратные зависимости пакета {package} (кто от него зависит):")
+    lines = reverse_lines(graph)
+    for line in lines:
+        print(f"  {line}")
+    if not lines:
+        print("  (от этого пакета никто не зависит)")
+    print(f"Всего пакетов, которые зависят от {package}: {count_users(graph)}")
+
+
 def run(config, debug):
     """Выполняет главное действие программы в зависимости от параметров."""
     if debug:
         show_config(config)
+    if config["reverse"]:
+        show_reverse(config)
+        return
     show_graph(config)
 
 

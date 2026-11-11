@@ -17,6 +17,7 @@
 - правильно обрабатывает циклические зависимости;
 - работает с тестовым репозиторием (файл с пакетами `A`, `B`, `C`...);
 - показывает обратные зависимости (кто зависит от пакета) в тестовом режиме;
+- печатает граф на языке диаграмм D2 и (по параметру) в виде ASCII-дерева.
 
 ## 2. Описание функций и настроек
 
@@ -47,6 +48,9 @@ C: D
 D:
 ```
 
+Вывод D2 можно вставить на сайт https://play.d2lang.com или
+сохранить в файл `.d2` вне репозитория и открыть в программе D2.
+
 ## 3. Сборка и запуск тестов
 
 Программа использует только стандартную библиотеку Python 3, собирать
@@ -65,13 +69,13 @@ set PYTHONPATH=src
 python -m unittest discover -s tests -v
 ```
 
-Демонстрационный сценарий этапа: `.\scripts\stage4.bat`.
+Демонстрационный сценарий этапа: `.\scripts\stage5.bat`.
 
 ## 4. Примеры использования
 
 ```
-python src\depgraph.py --package A --repo tests\repos\simple.txt --test
-python src\depgraph.py --package A --repo tests\repos\cycle.txt --test
-python src\depgraph.py --package A --repo tests\repos\big.txt --test --depth 2 --filter G
+python src\depgraph.py --package A --repo tests\repos\big.txt --test --ascii --depth 3
+python src\depgraph.py --package A --repo tests\repos\cycle.txt --test --ascii
+python src\depgraph.py --package requests --ascii --depth 2
 python src\depgraph.py --package D --repo tests\repos\simple.txt --test --reverse
 ```

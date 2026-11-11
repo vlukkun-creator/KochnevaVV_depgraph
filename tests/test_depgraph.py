@@ -274,5 +274,60 @@ class BuildGraphTest(unittest.TestCase):
         self.assertIn("C -> A", out)
 
 
+class ReverseTest(unittest.TestCase):
+    """Обратные зависимости."""
+
+    def test_reverse_edges(self):
+        """Ребра переворачиваются."""
+        repo = depgraph.read_test_repo(repo_path("simple.txt"))
+        self.assertEqual(depgraph.reverse_edges(repo),
+                         {"B": ["A"], "C": ["A"], "D": ["B", "C"]})
+
+    def test_main_reverse(self):
+        """Для D зависят B, C и A."""
+        code, out, _ = run_main(
+            ["--package", "D", "--test", "--reverse",
+             "--repo", repo_path("simple.txt")])
+        self.assertEqual(code, 0)
+        self.assertIn("D <- B C", out)
+        self.assertIn("B <- A", out)
+        self.assertIn("зависят от D: 3", out)
+
+    def test_reverse_depth_and_filter(self):
+        """Глубина и фильтр работают и для обратных зависимостей."""
+        code, out, _ = run_main(
+            ["--package", "D", "--test", "--reverse", "--depth", "1",
+             "--repo", repo_path("simple.txt")])
+        self.assertEqual(code, 0)
+        self.assertNotIn("B <- A", out)
+        code, out, _ = run_main(
+            ["--package", "D", "--test", "--reverse", "--filter", "B",
+             "--repo", repo_path("simple.txt")])
+        self.assertNotIn("B", out.replace("Обратные", ""))
+
+    def test_reverse_nobody(self):
+        """Если от пакета никто не зависит, пишем об этом."""
+        code, out, _ = run_main(
+            ["--package", "A", "--test", "--reverse",
+             "--repo", repo_path("simple.txt")])
+        self.assertEqual(code, 0)
+        self.assertIn("никто не зависит", out)
+
+    def test_reverse_cycle(self):
+        """В цикле обратный обход тоже заканчивается."""
+        code, out, _ = run_main(
+            ["--package", "A", "--test", "--reverse",
+             "--repo", repo_path("cycle.txt")])
+        self.assertEqual(code, 0)
+        self.assertIn("A <- C", out)
+        self.assertIn("зависят от A: 3", out)
+
+    def test_reverse_real_mode(self):
+        """В реальном режиме обратные зависимости дают понятную ошибку."""
+        code, _, err = run_main(["--package", "requests", "--reverse"])
+        self.assertEqual(code, EXPECTED_BAD_CODE)
+        self.assertIn("--test", err)
+
+
 if __name__ == "__main__":
     unittest.main()

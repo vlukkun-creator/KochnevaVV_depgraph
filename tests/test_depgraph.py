@@ -260,18 +260,12 @@ class BuildGraphTest(unittest.TestCase):
             "requests", fake_deps, "http://r", 3, None)
         self.assertEqual(graph, {"requests": ["idna"], "idna": []})
 
-    def test_graph_lines(self):
-        """Строки графа выглядят как  A -> B C."""
-        lines = depgraph.graph_lines(self.graph("simple.txt"))
-        self.assertEqual(lines[0], "A -> B C")
-        self.assertEqual(lines[-1], "D -> -")
-
     def test_main_output(self):
         """main печатает граф в тестовом режиме."""
         code, out, _ = run_main(
             ["--package", "A", "--test", "--repo", repo_path("cycle.txt")])
         self.assertEqual(code, 0)
-        self.assertIn("C -> A", out)
+        self.assertIn('"C" -> "A"', out)
 
 
 class ReverseTest(unittest.TestCase):
@@ -327,6 +321,46 @@ class ReverseTest(unittest.TestCase):
         code, _, err = run_main(["--package", "requests", "--reverse"])
         self.assertEqual(code, EXPECTED_BAD_CODE)
         self.assertIn("--test", err)
+
+
+class PictureTest(unittest.TestCase):
+    """Описание на языке D2 и ASCII-дерево."""
+
+    def test_d2(self):
+        """Ребра записаны в кавычках, одиночный узел объявлен отдельно."""
+        text = depgraph.d2_text({"a.b": ["c"], "c": [], "z": []})
+        self.assertIn('"a.b" -> "c"', text)
+        self.assertIn('\n"z"', text)
+        self.assertTrue(text.startswith("direction: right"))
+
+    def test_tree(self):
+        """Дерево ромба рисуется ASCII-символами."""
+        graph = {"A": ["B", "C"], "B": ["D"], "C": ["D"], "D": []}
+        lines = depgraph.tree_lines(graph, "A", 5)
+        self.assertEqual(lines, [
+            "A", "|-- B", "|   `-- D", "`-- C", "    `-- D"])
+
+    def test_tree_cycle(self):
+        """В дереве цикл помечается и не раскрывается."""
+        graph = {"A": ["B"], "B": ["A"]}
+        lines = depgraph.tree_lines(graph, "A", 10)
+        self.assertEqual(lines[-1], "    `-- A (цикл)")
+
+    def test_tree_depth(self):
+        """Дерево не глубже заданного уровня."""
+        graph = {"A": ["B"], "B": ["C"], "C": []}
+        self.assertEqual(depgraph.tree_lines(graph, "A", 1),
+                         ["A", "`-- B"])
+
+    def test_main_ascii(self):
+        """С параметром --ascii после D2 печатается дерево."""
+        argv = ["--package", "A", "--test", "--repo",
+                repo_path("simple.txt")]
+        _, out, _ = run_main(argv)
+        self.assertNotIn("ASCII-дерево", out)
+        _, out, _ = run_main(argv + ["--ascii"])
+        self.assertIn("ASCII-дерево", out)
+        self.assertIn("|-- B", out)
 
 
 if __name__ == "__main__":

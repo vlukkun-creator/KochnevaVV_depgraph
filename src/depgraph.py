@@ -26,6 +26,11 @@ EXTRA_PATTERN = re.compile(r"extra\s*==")
 SEPARATOR_PATTERN = re.compile(r"[-_.]+")
 TEST_NAME_PATTERN = re.compile(r"^[A-Z]+$")
 COMMENT_SIGN = "#"
+BRANCH = "|-- "
+LAST_BRANCH = "`-- "
+VERTICAL = "|   "
+EMPTY = "    "
+CYCLE_MARK = " (цикл)"
 
 
 class ToolError(Exception):
@@ -328,25 +333,6 @@ def forward_graph(config):
     return build_graph(root, loader, source, depth, substring)
 
 
-def graph_lines(graph):
-    """Делает строки для вывода: на каждой пакет и его зависимости."""
-    lines = []
-    for name, deps in graph.items():
-        text = " ".join(deps) if deps else "-"
-        lines.append(f"{name} -> {text}")
-    return lines
-
-
-def show_graph(config):
-    """Строит граф и печатает его на экран (этапы 3 и 4)."""
-    graph = forward_graph(config)
-    print(f"Граф зависимостей пакета {get_root(config)}:")
-    print(f"(глубина анализа: {config['depth']})")
-    for line in graph_lines(graph):
-        print(f"  {line}")
-    print(f"Всего пакетов в графе: {len(graph)}")
-
-
 def reverse_edges(repo):
     """Переворачивает граф: пакет -> список тех, кто от него зависит."""
     reverse = {}
@@ -404,6 +390,68 @@ def show_reverse(config):
     print(f"Всего пакетов, которые зависят от {package}: {count_users(graph)}")
 
 
+def quote(name):
+    """Берет имя в двойные кавычки, как требует язык D2 для точек в именах."""
+    return f'"{name}"'
+
+
+def d2_text(graph):
+    """Делает описание графа на языке диаграмм D2.
+
+    Каждое ребро пишется строкой вида  "A" -> "B".
+    """
+    lines = ["direction: right"]
+    linked = set()
+    for name, deps in graph.items():
+        for dep in deps:
+            lines.append(f"{quote(name)} -> {quote(dep)}")
+            linked.update((name, dep))
+    for name in graph:
+        if name not in linked:
+            lines.append(quote(name))
+    return "\n".join(lines)
+
+
+def children_items(graph, name, prefix, path):
+    """Готовит детей пакета для стека (последний ребенок будет сверху)."""
+    deps = graph.get(name, [])
+    items = [(dep, prefix, dep == deps[-1], path) for dep in deps]
+    items.reverse()
+    return items
+
+
+def tree_lines(graph, root, max_depth):
+    """Делает ASCII-дерево зависимостей. Рекурсии нет, вместо нее стек.
+
+    Если пакет уже есть выше по этой же ветке, значит это цикл:
+    рядом пишем пометку и дальше не идем.
+    """
+    lines = [root]
+    stack = children_items(graph, root, "", (root,))
+    while stack:
+        name, prefix, is_last, path = stack.pop()
+        branch = LAST_BRANCH if is_last else BRANCH
+        is_cycle = name in path
+        lines.append(prefix + branch + name + (CYCLE_MARK if is_cycle else ""))
+        if is_cycle or len(path) >= max_depth:
+            continue
+        child_prefix = prefix + (EMPTY if is_last else VERTICAL)
+        stack.extend(children_items(graph, name, child_prefix, path + (name,)))
+    return lines
+
+
+def show_picture(config):
+    """Печатает описание графа на языке D2 и, если надо, ASCII-дерево."""
+    graph = forward_graph(config)
+    print("Описание графа на языке D2:")
+    print(d2_text(graph))
+    if config["ascii"]:
+        print()
+        print("ASCII-дерево зависимостей:")
+        for line in tree_lines(graph, get_root(config), config["depth"]):
+            print(line)
+
+
 def run(config, debug):
     """Выполняет главное действие программы в зависимости от параметров."""
     if debug:
@@ -411,7 +459,7 @@ def run(config, debug):
     if config["reverse"]:
         show_reverse(config)
         return
-    show_graph(config)
+    show_picture(config)
 
 
 def main(argv=None):
